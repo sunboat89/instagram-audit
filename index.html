@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Provino — Audit Follower Instagram</title>
+<link rel="icon" href="data:,">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@0.263.1/dist/umd/lucide.js"></script>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useMemo, useCallback } = React;
+
+// ---- lucide icon wrappers (usa lucide UMD invece di lucide-react) ----
+function Icon({ name, size = 14, color, style }) {
+  const ref = React.useRef(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.innerHTML = "";
+      const svg = lucide.createElement(lucide.icons[name]);
+      ref.current.appendChild(svg);
+    }
+  }, [name, size, color]);
+  return <span ref={ref} style={{ display: "inline-flex", width: size, height: size, color, ...style }} />;
+}
+
+// ---- Storage locale (localStorage), API compatibile async come l'originale ----
+const storage = {
+  async get(key) {
+    const v = localStorage.getItem("provino:" + key);
+    return v === null ? null : { value: v };
+  },
+  async set(key, value) {
+    localStorage.setItem("provino:" + key, value);
+  },
+  async delete(key) {
+    localStorage.removeItem("provino:" + key);
+  },
+};
+
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const formatDateTime = (ts) => {
+  const d = new Date(ts);
+  const date = d.toLocaleDateString("it-IT");
+  const time = d.toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit" });
+  return `${date} alle ${time}`;
+};
+
+function usernameFromHref(href) {
+  try {
+    const url = new URL(href);
+    const parts = url.pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+function collectEntries(node, acc) {
+  if (Array.isArray(node)) {
+    node.forEach((item) => collectEntries(item, acc));
+  } else if (node && typeof node === "object") {
+    if (Array.isArray(node.string_list_data)) {
+      const first = node.string_list_data[0];
+      if (first) {
+        const username = first.value || node.title || usernameFromHref(first.href);
+        if (username) {
+          acc.push({
+            username,
+            href: `https://www.instagram.com/${username}/`,
+            timestamp: first.timestamp || null,
+          });
+        }
+      }
+    } else {
+      Object.values(node).forEach((v) => collectEntries(v, acc));
+    }
+  }
+}
+
+function parseInstagramJSON(jsonData) {
+  const acc = [];
+  collectEntries(jsonData, acc);
+  const map = new Map();
+  acc.forEach((e) => map.set(e.username.toLowerCase(), e));
+  return Array.from(map.values());
+}
+
+const DAILY_LIMIT = 100;
+
+const SEED_WHITELIST = [
+  "zerofriendly.music","zdizoro","xavierfoleybass","williepeyote","whitemarymusic","wearemohana",
+  "wallie_illustrator","vinyls_in_tv","vintagepaleoart","vinello_e_domiciliari","vazzanikki",
+  "valeriolundini","umbriantalk","umbriajazzofficial","tybo_ambientsky","trendypopita","tommorello",
+  "thomyorke","thomasrossini1","theweirdsideoftheinternet","thewarning_aust","theuniverse_unibo",
+  "thesoundofmachines","there_i_ruined_it","thephilharmonik","thejazzestate","synthnews",
+  "suenaenlacalletv","sturbix","studioghibli.it","streetmusicmap","stdoggy","spagnolo_francesco_ph",
+  "soundmichela","sonogiorgiopoi","somewhere_in_june","skyr0_","sir_jane_official","sintesi_festival",
+  "siae_official","shifty71","sghettoclub_ogs","scritteignorantiabologna","satoffizial","rogerwaters",
+  "rodbonner","robot.chicken.italia","ritapayesroma","rione_morlupo","rimbapallacanestro",
+  "rifugiomontecavallo","retroscifiart","resistthethrone","repubblicaidee","reportrai3",
+  "reclecticbazar","raresmusica","rambosmash","rageagainstthemachine","radiohead",
+  "pugilisticanavile","playingforchangefoundation","playing4change","paolomixo","pablotrincia",
+  "ovidiotrippa","over30gamer","no_border_cup","nba","namasce_milano","musicadabere",
+  "monkeysplanet.climb","minelli_fr91","mimmo.modem","metodovibrazionale","mercatoritrovato",
+  "melon__husk","maxpezzali","mauro_repetto_official","marcellocesena","makkox","madonnelettriche",
+  "lucadegennaro","lorenzobrunori","leoago8","lascimmiapensa","lascimmiagioca","laripubblica.it",
+  "lapartestranadellinternet","laltrospazio","lagiornatatipo","labas_bo","la_latteria3d",
+  "komos.corolgbt","joe_dart","ivivaifoligno","iosonouncane","intrashttenimento2.0",
+  "iltiopepe_official","ilregazdibolo","ibiscogiglio","hsl_volley_antirazzista","hideo_kojima",
+  "gretathunberg","greenpeace","greasykingdom23","granmilandixielandsociety","grandiraponi",
+  "giovannirussoalesi","gianluca_busani","giango_bizzarre_avventure","gattuzan88","garyclarkjr",
+  "gardenbo","gaiakevorkian","fuori_festival","frasassiclimbingfestival","francesco_gucci_",
+  "frah_quintale","fotocaparezza","festival_del_videocane","ferrarabuskersfestival","factanza",
+  "ermusiccommission","emmanlde","emanuelerenzini","efestohouse","dusttodigital","dueventi_music",
+  "dottor_ciro","ditonellapiaga","disagioteca2.0","disagio.supremo","dimestoreradio","demonaco",
+  "deakharp","das.bologna","darstellerband","daniela___pes","dancityfestival","cromazoo",
+  "criv.bologna","cringitaly2.0","cosenoncose","correggiomusicfestival","comunedibologna",
+  "collettivohmcf","collettivo_meze","claudiano.jpeg","circopaniko","circolo.hex","cinetecabologna",
+  "cinemadue","chiara_cippo","chiamarsiminors","ceri_wax","caterinacrescini","brunobelissimo",
+  "brianmayforreal","bolognina_boxe","bologna_parvenza","binario69","becomedy_uk","bachelite_clab",
+  "baak.bologna","assurditee","ashleylynofficial","arghiarivista","arci_subasio",
+  "annachiara.psicologa","animalincittafoligno","andreasantarelli93","amicheincucina.it","altea.am",
+  "alexpaletta","alessiobertallot","alessio__morelli","alessandroarcodia","alessandro_raspa",
+  "aka5ha__","agnusdeilaura","agenzia_ansa","_sly.kid_","_rootsie","_labadessa","_elnoir_",
+  "_elephantintheroom__","__remris__",
+];
+
+function InstagramAudit() {
+  const [following, setFollowing] = useState(null);
+  const [followers, setFollowers] = useState(null);
+  const [whitelist, setWhitelist] = useState([]);
+  const [progress, setProgress] = useState({ date: todayStr(), doneUsernames: [] });
+  const [activeTab, setActiveTab] = useState("notback");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [whitelistInput, setWhitelistInput] = useState("");
+  const [visibleCount, setVisibleCount] = useState(60);
+  const [lastUploadTime, setLastUploadTime] = useState(null);
+  const [importMsg, setImportMsg] = useState(null);
+
+  useEffect(() => { setVisibleCount(60); }, [activeTab]);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const wl = await storage.get("whitelist");
+        const current = wl ? JSON.parse(wl.value) : [];
+        const merged = Array.from(new Set([...current, ...SEED_WHITELIST]));
+        setWhitelist(merged);
+        if (merged.length !== current.length) {
+          await storage.set("whitelist", JSON.stringify(merged));
+        }
+      } catch (e) {
+        setWhitelist(SEED_WHITELIST);
+      }
+      try {
+        const pr = await storage.get("daily-progress");
+        if (pr) {
+          const parsed = JSON.parse(pr.value);
+          setProgress(parsed.date === todayStr() ? parsed : { date: todayStr(), doneUsernames: [] });
+        }
+      } catch (e) {}
+      try {
+        const lu = await storage.get("last-upload");
+        if (lu) {
+          const parsed = JSON.parse(lu.value);
+          setFollowing(parsed.following || null);
+          setFollowers(parsed.followers || null);
+          setLastUploadTime(parsed.uploadedAt || null);
+        }
+      } catch (e) {}
+      setLoading(false);
+    })();
+  }, []);
+
+  const persistWhitelist = useCallback(async (next) => {
+    setWhitelist(next);
+    try { await storage.set("whitelist", JSON.stringify(next)); } catch (e) {}
+  }, []);
+
+  const persistProgress = useCallback(async (next) => {
+    setProgress(next);
+    try { await storage.set("daily-progress", JSON.stringify(next)); } catch (e) {}
+  }, []);
+
+  const persistUpload = useCallback(async (f, fo, ts) => {
+    try {
+      await storage.set("last-upload", JSON.stringify({ following: f, followers: fo, uploadedAt: ts || Date.now() }));
+    } catch (e) {}
+  }, []);
+
+  useEffect(() => {
+    if (following && followers) {
+      const now = Date.now();
+      persistUpload(following, followers, now);
+      setLastUploadTime(now);
+    }
+  }, [following, followers, persistUpload]);
+
+  const handleFile = (e, type) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setError(null);
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const json = JSON.parse(ev.target.result);
+        const entries = parseInstagramJSON(json);
+        if (entries.length === 0) {
+          setError(`Nessun contatto trovato nel file "${file.name}". Verifica di aver caricato il file giusto.`);
+          return;
+        }
+        if (type === "following") setFollowing(entries);
+        else setFollowers(entries);
+      } catch (err) {
+        setError(`Il file "${file.name}" non è un JSON valido.`);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const followingSet = useMemo(() => new Set((following || []).map((f) => f.username.toLowerCase())), [following]);
+  const followersSet = useMemo(() => new Set((followers || []).map((f) => f.username.toLowerCase())), [followers]);
+  const whitelistSet = useMemo(() => new Set(whitelist.map((w) => w.toLowerCase())), [whitelist]);
+  const doneSet = useMemo(() => new Set(progress.doneUsernames.map((u) => u.toLowerCase())), [progress]);
+
+  const notFollowingBack = useMemo(() => {
+    if (!following) return [];
+    return following.filter((f) => !followersSet.has(f.username.toLowerCase()) && !whitelistSet.has(f.username.toLowerCase()));
+  }, [following, followersSet, whitelistSet]);
+
+  const notFollowedBack = useMemo(() => {
+    if (!followers) return [];
+    return followers.filter((f) => !followingSet.has(f.username.toLowerCase()) && !whitelistSet.has(f.username.toLowerCase()));
+  }, [followers, followingSet, whitelistSet]);
+
+  const sortList = (list) =>
+    [...list].sort((a, b) => {
+      const aDone = doneSet.has(a.username.toLowerCase());
+      const bDone = doneSet.has(b.username.toLowerCase());
+      if (aDone !== bDone) return aDone ? 1 : -1;
+      return a.username.localeCompare(b.username);
+    });
+
+  const remaining = DAILY_LIMIT - progress.doneUsernames.length;
+  const nearLimit = remaining <= 20 && remaining > 0;
+  const atLimit = remaining <= 0;
+
+  const markDone = (username) => {
+    if (doneSet.has(username.toLowerCase()) || atLimit) return;
+    persistProgress({ ...progress, doneUsernames: [...progress.doneUsernames, username] });
+  };
+
+  const undoDone = (username) => {
+    persistProgress({ ...progress, doneUsernames: progress.doneUsernames.filter((u) => u.toLowerCase() !== username.toLowerCase()) });
+  };
+
+  const addToWhitelist = (username) => {
+    if (whitelistSet.has(username.toLowerCase())) return;
+    persistWhitelist([...whitelist, username]);
+  };
+
+  const removeFromWhitelist = (username) => {
+    persistWhitelist(whitelist.filter((w) => w.toLowerCase() !== username.toLowerCase()));
+  };
+
+  const addWhitelistManual = () => {
+    const name = whitelistInput.trim().replace(/^@/, "");
+    if (!name) return;
+    addToWhitelist(name);
+    setWhitelistInput("");
+  };
+
+  const resetUpload = () => {
+    setFollowing(null);
+    setFollowers(null);
+    storage.delete("last-upload").catch(() => {});
+  };
+
+  const openProfile = (username) => {
+    const appUrl = `instagram://user?username=${username}`;
+    const webUrl = `https://www.instagram.com/${username}/`;
+    let switched = false;
+    const onBlur = () => { switched = true; };
+    window.addEventListener("blur", onBlur);
+    window.location.href = appUrl;
+    setTimeout(() => {
+      window.removeEventListener("blur", onBlur);
+      if (!switched) window.open(webUrl, "_blank", "noopener,noreferrer");
+    }, 700);
+  };
+
+  // ---- Backup export / import (rete di sicurezza contro pulizia cache Safari) ----
+  const exportBackup = () => {
+    const backup = { whitelist, progress, following, followers, lastUploadTime, exportedAt: Date.now() };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `provino-backup-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const importBackup = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        if (data.whitelist) await persistWhitelist(data.whitelist);
+        if (data.progress) await persistProgress(data.progress);
+        if (data.following && data.following) setFollowing(data.following);
+        if (data.followers && data.followers) setFollowers(data.followers);
+        setImportMsg("Backup importato correttamente.");
+        setTimeout(() => setImportMsg(null), 4000);
+      } catch (err) {
+        setImportMsg("File di backup non valido.");
+        setTimeout(() => setImportMsg(null), 4000);
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  const counterColor = atLimit ? "#E8432F" : nearLimit ? "#D9A441" : "#7A8B5C";
+  const bothLoaded = following && followers;
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#14110F", color: "#F0EAE0", fontFamily: "'IBM Plex Mono', monospace" }}>
+      <div style={{ borderBottom: "1px solid #3A3530" }}>
+        <div style={{ maxWidth: 880, margin: "0 auto", padding: "28px 20px 24px", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
+          <div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 26, letterSpacing: "-0.02em", color: "#F0EAE0" }}>
+              PROVINO<span style={{ color: "#E8432F" }}>.</span>
+            </div>
+            <div style={{ fontSize: 12, color: "#8C8377", marginTop: 4, letterSpacing: "0.04em" }}>
+              AUDIT FOLLOWER · CONTACT SHEET PER IL TUO INSTAGRAM
+            </div>
+          </div>
+          <div style={{ border: `1px solid ${counterColor}`, borderRadius: 4, padding: "8px 14px", textAlign: "right", background: "#1D1917", minWidth: 150 }}>
+            <div style={{ fontSize: 9, letterSpacing: "0.12em", color: "#8C8377" }}>UNFOLLOW OGGI</div>
+            <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 22, color: counterColor, letterSpacing: "0.05em", fontVariantNumeric: "tabular-nums" }}>
+              {String(progress.doneUsernames.length).padStart(3, "0")}
+              <span style={{ color: "#3A3530", fontSize: 16 }}> / {DAILY_LIMIT}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 880, margin: "0 auto", padding: "24px 20px 80px" }}>
+        {loading && <div style={{ color: "#8C8377", fontSize: 13 }}>Caricamento…</div>}
+
+        {!loading && (
+          <>
+            {!bothLoaded && (
+              <div style={{ border: "1px dashed #3A3530", borderRadius: 6, padding: 24, marginBottom: 24 }}>
+                <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Carica i tuoi dati</div>
+                <div style={{ fontSize: 12.5, color: "#8C8377", marginBottom: 18, lineHeight: 1.6 }}>
+                  Da Instagram: Impostazioni → Centro Account → Le tue informazioni e permessi → Esporta le tue informazioni → formato JSON. Carica qui{" "}
+                  <code style={{ color: "#D9A441" }}>following.json</code> e <code style={{ color: "#D9A441" }}>followers_1.json</code>.
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <UploadSlot label="Following" sublabel={following ? `${following.length} account caricati` : "following.json"} done={!!following} onChange={(e) => handleFile(e, "following")} />
+                  <UploadSlot label="Followers" sublabel={followers ? `${followers.length} account caricati` : "followers_1.json"} done={!!followers} onChange={(e) => handleFile(e, "followers")} />
+                </div>
+                {error && <div style={{ marginTop: 14, fontSize: 12.5, color: "#E8432F" }}>{error}</div>}
+
+                <div style={{ marginTop: 18, borderTop: "1px solid #3A3530", paddingTop: 14 }}>
+                  <div style={{ fontSize: 11.5, color: "#8C8377", marginBottom: 8 }}>Hai già un backup salvato in precedenza?</div>
+                  <label style={ghostBtnStyle}>
+                    <Icon name="Upload" size={13} style={{ marginRight: 6 }} />
+                    Importa backup
+                    <input type="file" accept=".json,application/json" onChange={importBackup} style={{ display: "none" }} />
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {bothLoaded && (
+              <>
+                {lastUploadTime && <div style={{ fontSize: 11.5, color: "#8C8377", marginBottom: 10 }}>Ultimo caricamento: {formatDateTime(lastUploadTime)}</div>}
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 1, background: "#3A3530", borderRadius: 6, overflow: "hidden", marginBottom: 20 }}>
+                  <Stat label="Segui" value={following.length} />
+                  <Stat label="Ti seguono" value={followers.length} />
+                  <Stat label="Non ricambiano" value={notFollowingBack.length} accent="#E8432F" />
+                  <Stat label="Non segui" value={notFollowedBack.length} accent="#7A8B5C" />
+                </div>
+
+                <div style={{ display: "flex", gap: 4, marginBottom: 16, flexWrap: "wrap" }}>
+                  <Tab active={activeTab === "notback"} onClick={() => setActiveTab("notback")} label={`Non ti riseguono (${notFollowingBack.length})`} />
+                  <Tab active={activeTab === "notfollowed"} onClick={() => setActiveTab("notfollowed")} label={`Non segui (${notFollowedBack.length})`} />
+                  <Tab active={activeTab === "whitelist"} onClick={() => setActiveTab("whitelist")} label={`Whitelist (${whitelist.length})`} />
+                </div>
+
+                {atLimit && activeTab === "notback" && (
+                  <div style={{ fontSize: 12.5, color: "#E8432F", border: "1px solid #E8432F", borderRadius: 4, padding: "8px 12px", marginBottom: 12 }}>
+                    Hai raggiunto il limite di {DAILY_LIMIT} unfollow per oggi. Il contatore si azzera domani.
+                  </div>
+                )}
+
+                {activeTab === "notback" && (
+                  <>
+                    <ContactList list={sortList(notFollowingBack).slice(0, visibleCount)} doneSet={doneSet} atLimit={atLimit} onOpen={openProfile} onMarkDone={markDone} onUndo={undoDone} onWhitelist={addToWhitelist} emptyText="Nessuno: tutti quelli che segui ti riseguono." actionLabel="Segna come fatto (dopo l'unfollow manuale)" />
+                    <LoadMore total={notFollowingBack.length} visible={visibleCount} onMore={() => setVisibleCount((v) => v + 60)} />
+                  </>
+                )}
+
+                {activeTab === "notfollowed" && (
+                  <>
+                    <ContactList list={sortList(notFollowedBack).slice(0, visibleCount)} doneSet={new Set()} atLimit={false} onOpen={openProfile} onWhitelist={addToWhitelist} emptyText="Nessuno: segui già tutti i tuoi follower." readOnlyAction />
+                    <LoadMore total={notFollowedBack.length} visible={visibleCount} onMore={() => setVisibleCount((v) => v + 60)} />
+                  </>
+                )}
+
+                {activeTab === "whitelist" && (
+                  <div>
+                    <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
+                      <input value={whitelistInput} onChange={(e) => setWhitelistInput(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addWhitelistManual()} placeholder="username da escludere sempre" style={{ flex: 1, background: "#1D1917", border: "1px solid #3A3530", borderRadius: 4, padding: "8px 10px", color: "#F0EAE0", fontFamily: "'IBM Plex Mono', monospace", fontSize: 13, outline: "none" }} />
+                      <button onClick={addWhitelistManual} style={{ background: "#E8432F", color: "#14110F", border: "none", borderRadius: 4, padding: "0 16px", fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, fontSize: 13, cursor: "pointer" }}>Aggiungi</button>
+                    </div>
+                    {whitelist.length === 0 && <div style={{ fontSize: 13, color: "#8C8377" }}>Nessun account in whitelist. Chi aggiungi qui non comparirà mai nelle liste di confronto.</div>}
+                    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                      {[...whitelist].sort((a, b) => a.localeCompare(b)).map((username) => (
+                        <div key={username} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: "#1D1917", borderBottom: "1px solid #14110F" }}>
+                          <span onClick={() => openProfile(username)} style={{ fontSize: 13.5, cursor: "pointer" }}>@{username}</span>
+                          <button onClick={() => removeFromWhitelist(username)} title="Rimuovi dalla whitelist" style={iconBtnStyle}><Icon name="Trash2" size={15} /></button>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                <div style={{ marginTop: 32, display: "flex", gap: 14, alignItems: "center", flexWrap: "wrap" }}>
+                  <button onClick={resetUpload} style={ghostBtnStyle}><Icon name="RotateCcw" size={13} style={{ marginRight: 6 }} />Carica nuovi file</button>
+                  <button onClick={exportBackup} style={ghostBtnStyle}><Icon name="Download" size={13} style={{ marginRight: 6 }} />Esporta backup</button>
+                  <label style={ghostBtnStyle}>
+                    <Icon name="Upload" size={13} style={{ marginRight: 6 }} />
+                    Importa backup
+                    <input type="file" accept=".json,application/json" onChange={importBackup} style={{ display: "none" }} />
+                  </label>
+                  {importMsg && <span style={{ fontSize: 12, color: "#7A8B5C" }}>{importMsg}</span>}
+                </div>
+              </>
+            )}
+
+            <div style={{ marginTop: 40, borderTop: "1px solid #3A3530", paddingTop: 16 }}>
+              <button onClick={() => setHelpOpen((h) => !h)} style={{ background: "none", border: "none", color: "#8C8377", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", gap: 4, padding: 0, fontFamily: "'IBM Plex Mono', monospace" }}>
+                <Icon name="ChevronDown" size={13} style={{ transform: helpOpen ? "rotate(180deg)" : "none", transition: "transform .15s" }} />
+                Come funziona / privacy
+              </button>
+              {helpOpen && (
+                <div style={{ fontSize: 12, color: "#8C8377", marginTop: 10, lineHeight: 1.7, maxWidth: 640 }}>
+                  Tutto avviene nel tuo browser: i file JSON e i dati restano salvati localmente sul dispositivo (localStorage), non vengono mai inviati a nessun server. "Segna come fatto" non esegue l'unfollow automaticamente — apre il profilo, poi tocca a te premere "Smetti di seguire" su Instagram. Il contatore serve solo a tenerti sotto ai {DAILY_LIMIT} unfollow al giorno e si azzera ogni mezzanotte. Usa "Esporta backup" regolarmente per avere una copia di sicurezza scaricata, indipendente dal browser.
+                </div>
+              )}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function UploadSlot({ label, sublabel, done, onChange }) {
+  return (
+    <label style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 8, padding: "20px 12px", borderRadius: 5, border: `1px solid ${done ? "#7A8B5C" : "#3A3530"}`, background: "#1D1917", cursor: "pointer", textAlign: "center" }}>
+      {done ? <Icon name="Check" size={18} color="#7A8B5C" /> : <Icon name="Upload" size={18} color="#8C8377" />}
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontSize: 13, fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 11, color: done ? "#7A8B5C" : "#8C8377" }}>{sublabel}</div>
+      <input type="file" accept=".json,application/json" onChange={onChange} style={{ display: "none" }} />
+    </label>
+  );
+}
+
+function Stat({ label, value, accent }) {
+  return (
+    <div style={{ background: "#1D1917", padding: "14px 12px" }}>
+      <div style={{ fontSize: 10, color: "#8C8377", letterSpacing: "0.06em", marginBottom: 4 }}>{label.toUpperCase()}</div>
+      <div style={{ fontFamily: "'Space Grotesk', sans-serif", fontWeight: 700, fontSize: 20, color: accent || "#F0EAE0" }}>{value}</div>
+    </div>
+  );
+}
+
+function Tab({ active, onClick, label }) {
+  return (
+    <button onClick={onClick} style={{ background: active ? "#E8432F" : "#1D1917", color: active ? "#14110F" : "#8C8377", border: "1px solid " + (active ? "#E8432F" : "#3A3530"), borderRadius: 4, padding: "6px 12px", fontSize: 12, fontFamily: "'Space Grotesk', sans-serif", fontWeight: 600, cursor: "pointer" }}>{label}</button>
+  );
+}
+
+const iconBtnStyle = { background: "none", border: "1px solid #3A3530", borderRadius: 4, color: "#8C8377", padding: 6, cursor: "pointer", display: "flex", alignItems: "center" };
+const ghostBtnStyle = { background: "none", border: "1px solid #3A3530", borderRadius: 4, color: "#8C8377", padding: "7px 12px", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", fontFamily: "'IBM Plex Mono', monospace" };
+
+function LoadMore({ total, visible, onMore }) {
+  if (visible >= total) return null;
+  return (
+    <button onClick={onMore} style={{ marginTop: 12, width: "100%", background: "#1D1917", border: "1px solid #3A3530", borderRadius: 4, color: "#8C8377", padding: "10px", fontSize: 12, cursor: "pointer", fontFamily: "'IBM Plex Mono', monospace" }}>
+      Mostra altri {Math.min(60, total - visible)} · {visible} / {total}
+    </button>
+  );
+}
+
+function ContactList({ list, doneSet, atLimit, onOpen, onMarkDone, onUndo, onWhitelist, emptyText, actionLabel, readOnlyAction }) {
+  if (list.length === 0) return <div style={{ fontSize: 13, color: "#8C8377", padding: "20px 0" }}>{emptyText}</div>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+      {list.map((entry, i) => {
+        const isDone = doneSet.has(entry.username.toLowerCase());
+        return (
+          <div key={entry.username} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", background: "#1D1917", borderBottom: "1px solid #14110F", opacity: isDone ? 0.5 : 1 }}>
+            <span style={{ fontSize: 10, color: "#3A3530", width: 30, fontVariantNumeric: "tabular-nums" }}>{String(i + 1).padStart(3, "0")}</span>
+            <span onClick={() => onOpen(entry.username)} style={{ flex: 1, fontSize: 13.5, cursor: "pointer", textDecoration: isDone ? "line-through" : "none" }} title="Apri profilo Instagram">@{entry.username}</span>
+            <button onClick={() => onOpen(entry.username)} title="Apri profilo" style={iconBtnStyle}><Icon name="ExternalLink" size={14} /></button>
+            {!readOnlyAction && !isDone && (
+              <button onClick={() => onMarkDone(entry.username)} disabled={atLimit} title={actionLabel} style={{ ...iconBtnStyle, color: atLimit ? "#3A3530" : "#7A8B5C", borderColor: atLimit ? "#3A3530" : "#7A8B5C", cursor: atLimit ? "not-allowed" : "pointer" }}><Icon name="Check" size={14} /></button>
+            )}
+            {!readOnlyAction && isDone && (
+              <button onClick={() => onUndo(entry.username)} title="Annulla" style={iconBtnStyle}><Icon name="Undo2" size={14} /></button>
+            )}
+            <button onClick={() => onWhitelist(entry.username)} title="Aggiungi a whitelist" style={iconBtnStyle}><Icon name="Star" size={14} /></button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const root = ReactDOM.createRoot(document.getElementById("root"));
+root.render(<InstagramAudit />);
+</script>
+</body>
+</html>
