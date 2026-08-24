@@ -2,9 +2,18 @@
 <html lang="it">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Provino — Audit Follower Instagram</title>
 <link rel="icon" href="data:,">
+
+<!-- Rende l'icona sulla home screen iOS una vera app standalone,
+     a schermo intero, separata dalle schede di Safari. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Provino">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="format-detection" content="telephone=no">
+<link rel="apple-touch-icon" href="data:image/png;base64,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">
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
   * { box-sizing: border-box; }
@@ -291,18 +300,13 @@ function InstagramAudit() {
     storage.delete("last-upload").catch(() => {});
   };
   const openProfile = username => {
+    // Niente più window.open() di riserva: su iOS, se l'app switch viene
+    // rilevato in ritardo (es. si torna subito alla home), quella riga
+    // apriva comunque una scheda Safari vuota "fantasma" in background.
+    // Basta window.location per far scattare il deep link nativo; se
+    // Instagram non è installata, iOS resta semplicemente sulla pagina.
     const appUrl = `instagram://user?username=${username}`;
-    const webUrl = `https://www.instagram.com/${username}/`;
-    let switched = false;
-    const onBlur = () => {
-      switched = true;
-    };
-    window.addEventListener("blur", onBlur);
     window.location.href = appUrl;
-    setTimeout(() => {
-      window.removeEventListener("blur", onBlur);
-      if (!switched) window.open(webUrl, "_blank", "noopener,noreferrer");
-    }, 700);
   };
 
   // ---- Backup export / import (rete di sicurezza contro pulizia cache Safari) ----
