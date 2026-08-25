@@ -33,8 +33,8 @@
   });
 </script>
 
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 
 <script>
 const {
@@ -148,10 +148,16 @@ function InstagramAudit() {
   const [following, setFollowing] = useState(null);
   const [followers, setFollowers] = useState(null);
   const [whitelist, setWhitelist] = useState([]);
-  const [progress, setProgress] = useState({
-    date: todayStr(),
-    doneUsernames: []
-  });
+  // "log" è lo storico PERMANENTE di ogni username mai segnato come fatto:
+  // { u: username, d: "yyyy-mm-dd" }. Non si azzera mai da solo.
+  // Il conteggio "di oggi" (per il limite giornaliero) si calcola filtrando
+  // il log per la data odierna, invece di tenere una lista separata che
+  // veniva erroneamente cancellata ad ogni cambio di giorno.
+  const [log, setLog] = useState([]);
+  // Account con link inaffidabile (probabile rename/riassegnazione dello
+  // username): messi da parte, non contano nel limite giornaliero e non
+  // vengono confusi con gli unfollow realmente eseguiti.
+  const [skipped, setSkipped] = useState([]);
   const [activeTab, setActiveTab] = useState("notback");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -177,14 +183,33 @@ function InstagramAudit() {
         setWhitelist(SEED_WHITELIST);
       }
       try {
-        const pr = await storage.get("daily-progress");
-        if (pr) {
-          const parsed = JSON.parse(pr.value);
-          setProgress(parsed.date === todayStr() ? parsed : {
-            date: todayStr(),
-            doneUsernames: []
-          });
+        // Nuovo formato: log permanente
+        const lg = await storage.get("unfollow-log");
+        let currentLog = lg ? JSON.parse(lg.value) : [];
+
+        // Migrazione dal vecchio formato "daily-progress" (che veniva
+        // azzerato ad ogni cambio giorno): se esiste ancora, i suoi
+        // username vengono importati nel log permanente con la data
+        // che avevano, poi la chiave vecchia viene rimossa.
+        const oldPr = await storage.get("daily-progress");
+        if (oldPr) {
+          try {
+            const parsedOld = JSON.parse(oldPr.value);
+            const existingUsernames = new Set(currentLog.map(e => e.u.toLowerCase()));
+            const migrated = (parsedOld.doneUsernames || [])
+              .filter(u => !existingUsernames.has(u.toLowerCase()))
+              .map(u => ({ u, d: parsedOld.date || todayStr() }));
+            currentLog = [...currentLog, ...migrated];
+            await storage.set("unfollow-log", JSON.stringify(currentLog));
+          } catch (e) {}
+          await storage.delete("daily-progress").catch(() => {});
         }
+
+        setLog(currentLog);
+      } catch (e) {}
+      try {
+        const sk = await storage.get("skipped-links");
+        if (sk) setSkipped(JSON.parse(sk.value));
       } catch (e) {}
       try {
         const lu = await storage.get("last-upload");
@@ -204,10 +229,16 @@ function InstagramAudit() {
       await storage.set("whitelist", JSON.stringify(next));
     } catch (e) {}
   }, []);
-  const persistProgress = useCallback(async next => {
-    setProgress(next);
+  const persistLog = useCallback(async next => {
+    setLog(next);
     try {
-      await storage.set("daily-progress", JSON.stringify(next));
+      await storage.set("unfollow-log", JSON.stringify(next));
+    } catch (e) {}
+  }, []);
+  const persistSkipped = useCallback(async next => {
+    setSkipped(next);
+    try {
+      await storage.set("skipped-links", JSON.stringify(next));
     } catch (e) {}
   }, []);
   const persistUpload = useCallback(async (f, fo, ts) => {
@@ -250,7 +281,9 @@ function InstagramAudit() {
   const followingSet = useMemo(() => new Set((following || []).map(f => f.username.toLowerCase())), [following]);
   const followersSet = useMemo(() => new Set((followers || []).map(f => f.username.toLowerCase())), [followers]);
   const whitelistSet = useMemo(() => new Set(whitelist.map(w => w.toLowerCase())), [whitelist]);
-  const doneSet = useMemo(() => new Set(progress.doneUsernames.map(u => u.toLowerCase())), [progress]);
+  const doneSet = useMemo(() => new Set(log.map(e => e.u.toLowerCase())), [log]);
+  const skippedSet = useMemo(() => new Set(skipped.map(u => u.toLowerCase())), [skipped]);
+  const todayCount = useMemo(() => log.filter(e => e.d === todayStr()).length, [log]);
   const notFollowingBack = useMemo(() => {
     if (!following) return [];
     return following.filter(f => !followersSet.has(f.username.toLowerCase()) && !whitelistSet.has(f.username.toLowerCase()));
@@ -260,26 +293,28 @@ function InstagramAudit() {
     return followers.filter(f => !followingSet.has(f.username.toLowerCase()) && !whitelistSet.has(f.username.toLowerCase()));
   }, [followers, followingSet, whitelistSet]);
   const sortList = list => [...list].sort((a, b) => {
-    const aDone = doneSet.has(a.username.toLowerCase());
-    const bDone = doneSet.has(b.username.toLowerCase());
-    if (aDone !== bDone) return aDone ? 1 : -1;
+    const tier = u => doneSet.has(u.toLowerCase()) ? 2 : skippedSet.has(u.toLowerCase()) ? 1 : 0;
+    const ta = tier(a.username);
+    const tb = tier(b.username);
+    if (ta !== tb) return ta - tb;
     return a.username.localeCompare(b.username);
   });
-  const remaining = DAILY_LIMIT - progress.doneUsernames.length;
+  const remaining = DAILY_LIMIT - todayCount;
   const nearLimit = remaining <= 20 && remaining > 0;
   const atLimit = remaining <= 0;
   const markDone = username => {
     if (doneSet.has(username.toLowerCase()) || atLimit) return;
-    persistProgress({
-      ...progress,
-      doneUsernames: [...progress.doneUsernames, username]
-    });
+    persistLog([...log, { u: username, d: todayStr() }]);
   };
   const undoDone = username => {
-    persistProgress({
-      ...progress,
-      doneUsernames: progress.doneUsernames.filter(u => u.toLowerCase() !== username.toLowerCase())
-    });
+    persistLog(log.filter(e => e.u.toLowerCase() !== username.toLowerCase()));
+  };
+  const toggleSkip = username => {
+    if (skippedSet.has(username.toLowerCase())) {
+      persistSkipped(skipped.filter(u => u.toLowerCase() !== username.toLowerCase()));
+    } else {
+      persistSkipped([...skipped, username]);
+    }
   };
   const addToWhitelist = username => {
     if (whitelistSet.has(username.toLowerCase())) return;
@@ -313,7 +348,8 @@ function InstagramAudit() {
   const exportBackup = () => {
     const backup = {
       whitelist,
-      progress,
+      log,
+      skipped,
       following,
       followers,
       lastUploadTime,
@@ -339,7 +375,26 @@ function InstagramAudit() {
       try {
         const data = JSON.parse(ev.target.result);
         if (data.whitelist) await persistWhitelist(data.whitelist);
-        if (data.progress) await persistProgress(data.progress);
+        if (data.log) {
+          // Formato nuovo: unione col log esistente, senza duplicati
+          const existing = new Set(log.map(en => en.u.toLowerCase()));
+          const merged = [...log, ...data.log.filter(en => !existing.has(en.u.toLowerCase()))];
+          await persistLog(merged);
+        } else if (data.progress && data.progress.doneUsernames) {
+          // Backup vecchio formato (pre-fix del bug di azzeramento):
+          // importa gli username già lavorati nel log permanente,
+          // con la data che il backup aveva salvato.
+          const existing = new Set(log.map(en => en.u.toLowerCase()));
+          const migrated = data.progress.doneUsernames
+            .filter(u => !existing.has(u.toLowerCase()))
+            .map(u => ({ u, d: data.progress.date || todayStr() }));
+          await persistLog([...log, ...migrated]);
+        }
+        if (data.skipped) {
+          const existingSk = new Set(skipped.map(u => u.toLowerCase()));
+          const mergedSk = [...skipped, ...data.skipped.filter(u => !existingSk.has(u.toLowerCase()))];
+          await persistSkipped(mergedSk);
+        }
         if (data.following && data.following) setFollowing(data.following);
         if (data.followers && data.followers) setFollowers(data.followers);
         setImportMsg("Backup importato correttamente.");
@@ -418,7 +473,7 @@ function InstagramAudit() {
       letterSpacing: "0.05em",
       fontVariantNumeric: "tabular-nums"
     }
-  }, String(progress.doneUsernames.length).padStart(3, "0"), /*#__PURE__*/React.createElement("span", {
+  }, String(todayCount).padStart(3, "0"), /*#__PURE__*/React.createElement("span", {
     style: {
       color: "#3A3530",
       fontSize: 16
@@ -573,10 +628,12 @@ function InstagramAudit() {
   }, "Hai raggiunto il limite di ", DAILY_LIMIT, " unfollow per oggi. Il contatore si azzera domani."), activeTab === "notback" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(ContactList, {
     list: sortList(notFollowingBack).slice(0, visibleCount),
     doneSet: doneSet,
+    skippedSet: skippedSet,
     atLimit: atLimit,
     onOpen: openProfile,
     onMarkDone: markDone,
     onUndo: undoDone,
+    onSkip: toggleSkip,
     onWhitelist: addToWhitelist,
     emptyText: "Nessuno: tutti quelli che segui ti riseguono.",
     actionLabel: "Segna come fatto (dopo l'unfollow manuale)"
@@ -889,10 +946,12 @@ function LoadMore({
 function ContactList({
   list,
   doneSet,
+  skippedSet,
   atLimit,
   onOpen,
   onMarkDone,
   onUndo,
+  onSkip,
   onWhitelist,
   emptyText,
   actionLabel,
@@ -913,6 +972,7 @@ function ContactList({
     }
   }, list.map((entry, i) => {
     const isDone = doneSet.has(entry.username.toLowerCase());
+    const isSkipped = !isDone && skippedSet && skippedSet.has(entry.username.toLowerCase());
     return /*#__PURE__*/React.createElement("div", {
       key: entry.username,
       style: {
@@ -922,7 +982,7 @@ function ContactList({
         padding: "10px 12px",
         background: "#1D1917",
         borderBottom: "1px solid #14110F",
-        opacity: isDone ? 0.5 : 1
+        opacity: isDone ? 0.5 : isSkipped ? 0.65 : 1
       }
     }, /*#__PURE__*/React.createElement("span", {
       style: {
@@ -937,10 +997,11 @@ function ContactList({
         flex: 1,
         fontSize: 13.5,
         cursor: "pointer",
-        textDecoration: isDone ? "line-through" : "none"
+        textDecoration: isDone ? "line-through" : "none",
+        color: isSkipped ? "#D9A441" : "#F0EAE0"
       },
       title: "Apri profilo Instagram"
-    }, "@", entry.username), /*#__PURE__*/React.createElement("button", {
+    }, "@", entry.username, isSkipped && " · verifica manuale"), /*#__PURE__*/React.createElement("button", {
       onClick: () => onOpen(entry.username),
       title: "Apri profilo",
       style: iconBtnStyle
@@ -967,7 +1028,15 @@ function ContactList({
     }, /*#__PURE__*/React.createElement(Icon, {
       name: "Undo2",
       size: 14
-    })), /*#__PURE__*/React.createElement("button", {
+    })), !readOnlyAction && !isDone && onSkip && /*#__PURE__*/React.createElement("button", {
+      onClick: () => onSkip(entry.username),
+      title: isSkipped ? "Rimuovi da 'da verificare'" : "Link inaffidabile: metti da parte (non conta come unfollow)",
+      style: {
+        ...iconBtnStyle,
+        color: isSkipped ? "#D9A441" : "#8C8377",
+        borderColor: isSkipped ? "#D9A441" : "#3A3530"
+      }
+    }, isSkipped ? "↺" : "⚠"), /*#__PURE__*/React.createElement("button", {
       onClick: () => onWhitelist(entry.username),
       title: "Aggiungi a whitelist",
       style: iconBtnStyle
